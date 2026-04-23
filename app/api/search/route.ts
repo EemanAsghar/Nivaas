@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
   ]);
 
   // Filter inspected if needed (after query since it's a relation)
-  const filtered = inspected ? listings.filter((l) => (l.inspections as unknown[]).length > 0) : listings;
+  const filtered = inspected ? listings.filter((l: { inspections: unknown[] }) => l.inspections.length > 0) : listings;
 
   return NextResponse.json({ listings: filtered, total, page, pages: Math.ceil(total / limit) });
 }
