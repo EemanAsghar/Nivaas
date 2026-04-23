@@ -43,8 +43,8 @@ export async function GET() {
     }),
   ]);
 
-  const active = listings.filter(l => l.status === 'ACTIVE').length;
-  const draft = listings.filter(l => l.status === 'DRAFT').length;
+  const active = listings.filter((l: { status: string }) => l.status === 'ACTIVE').length;
+  const draft = listings.filter((l: { status: string }) => l.status === 'DRAFT').length;
 
   return NextResponse.json({
     stats: { total: listings.length, active, draft, unread, pendingViewings },
