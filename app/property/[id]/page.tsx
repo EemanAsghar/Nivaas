@@ -3,11 +3,14 @@
 import { use, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import TopBar from '@/components/ui/TopBar';
 import Icon from '@/components/ui/Icon';
 import TrustBadge from '@/components/ui/TrustBadge';
 import TrustScore from '@/components/ui/TrustScore';
 import { useAuth } from '@/components/auth/AuthProvider';
+
+const PropertyMap = dynamic(() => import('@/components/ui/PropertyMap'), { ssr: false });
 
 type ChecklistItem = {
   id: string;
@@ -39,9 +42,19 @@ type Listing = {
   ownerVerified: boolean;
   isBoosted: boolean;
   createdAt: string;
+  latitude?: number | null;
+  longitude?: number | null;
   photos: { id: string; url: string; isCover: boolean; order: number }[];
   landlord: { id: string; name?: string; verificationTier: string; photoUrl?: string; createdAt: string };
   inspections: Inspection[];
+};
+
+type Review = {
+  id: string;
+  rating: number;
+  comment?: string | null;
+  createdAt: string;
+  author: { id: string; name?: string | null };
 };
 
 function computeTrust(l: Listing) {
@@ -82,6 +95,31 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
   const [msgError, setMsgError] = useState('');
 
   const [saved, setSaved] = useState(false);
+  const [lightbox, setLightbox] = useState<number | null>(null);
+
+  // Viewing request modal
+  const [viewModal, setViewModal] = useState(false);
+  const [viewDate, setViewDate] = useState('');
+  const [viewTime, setViewTime] = useState('10:00');
+  const [viewNote, setViewNote] = useState('');
+  const [viewSending, setViewSending] = useState(false);
+  const [viewDone, setViewDone] = useState(false);
+
+  // Inspection request modal
+  const [inspModal, setInspModal] = useState(false);
+  const [inspType, setInspType] = useState<'GENERAL' | 'MOVE_IN' | 'MOVE_OUT'>('GENERAL');
+  const [inspGateway, setInspGateway] = useState<'JAZZCASH' | 'EASYPAISA' | 'CARD'>('JAZZCASH');
+  const [inspSending, setInspSending] = useState(false);
+  const [inspDone, setInspDone] = useState(false);
+
+  // Reviews
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [reviewAvg, setReviewAvg] = useState<number | null>(null);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+  const [reviewDone, setReviewDone] = useState(false);
 
   useEffect(() => {
     fetch(`/api/listings/${id}`)
@@ -92,6 +130,40 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
       .then(d => { if (d) setListing(d.listing); })
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    fetch(`/api/listings/${id}/reviews`)
+      .then(r => r.json())
+      .then(d => { setReviews(d.reviews ?? []); setReviewAvg(d.avg ?? null); })
+      .catch(() => {});
+  }, [id]);
+
+  async function submitReview() {
+    if (!user || reviewRating === 0) return;
+    setReviewSubmitting(true);
+    setReviewError('');
+    const res = await fetch(`/api/listings/${id}/reviews`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: reviewRating, comment: reviewComment.trim() || null }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setReviewError(data.error ?? 'Failed to submit'); setReviewSubmitting(false); return; }
+    setReviews(prev => [data.review, ...prev]);
+    setReviewAvg(prev => prev === null ? reviewRating : Math.round(((prev * (reviews.length) + reviewRating) / (reviews.length + 1)) * 10) / 10);
+    setReviewRating(0);
+    setReviewComment('');
+    setReviewDone(true);
+    setReviewSubmitting(false);
+  }
+
+  useEffect(() => {
+    if (!user) return;
+    fetch('/api/saved')
+      .then(r => r.json())
+      .then(d => setSaved((d.listings ?? []).some((l: { id: string }) => l.id === id)))
+      .catch(() => {});
+  }, [id, user]);
 
   async function sendMessage() {
     if (!user) { setMsgError('Please sign in to message the landlord.'); return; }
@@ -117,6 +189,32 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
     const method = saved ? 'DELETE' : 'POST';
     await fetch(`/api/listings/${id}/save`, { method });
     setSaved(s => !s);
+  }
+
+  async function requestViewing() {
+    if (!viewDate) return;
+    setViewSending(true);
+    const proposedAt = new Date(`${viewDate}T${viewTime}:00`).toISOString();
+    await fetch('/api/viewing-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listingId: id, proposedAt, note: viewNote.trim() || undefined }),
+    });
+    setViewSending(false);
+    setViewDone(true);
+    setTimeout(() => { setViewModal(false); setViewDone(false); setViewDate(''); setViewNote(''); }, 2000);
+  }
+
+  async function requestInspection() {
+    setInspSending(true);
+    await fetch('/api/inspection-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listingId: id, type: inspType, gateway: inspGateway }),
+    });
+    setInspSending(false);
+    setInspDone(true);
+    setTimeout(() => { setInspModal(false); setInspDone(false); }, 2000);
   }
 
   if (loading) {
@@ -166,7 +264,7 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
 
       {/* Gallery */}
       <div style={{ padding: '18px 40px 0', display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gridTemplateRows: '220px 220px', gap: 8, height: 448 }}>
-        <div style={{ gridRow: '1 / span 2', borderRadius: 14, background: photos[0] ? `url(${photos[0].url}) center/cover` : 'var(--n-surface-2)', position: 'relative' }}>
+        <div onClick={() => photos[0] && setLightbox(0)} style={{ gridRow: '1 / span 2', borderRadius: 14, background: photos[0] ? `url(${photos[0].url}) center/cover` : 'var(--n-surface-2)', position: 'relative', cursor: photos[0] ? 'zoom-in' : 'default' }}>
           {!photos[0] && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'var(--n-muted)' }}><Icon name="camera" className="n-ico xl" /></div>}
           <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', gap: 6 }}>
             {p.landlord.verificationTier === 'VERIFIED' && <TrustBadge kind="nadra" />}
@@ -175,7 +273,7 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
           </div>
         </div>
         {[1, 2, 3, 4].map(i => (
-          <div key={i} style={{ borderRadius: 14, background: photos[i] ? `url(${photos[i].url}) center/cover` : 'var(--n-surface-2)', position: 'relative' }}>
+          <div key={i} onClick={() => photos[i] && setLightbox(i)} style={{ borderRadius: 14, background: photos[i] ? `url(${photos[i].url}) center/cover` : 'var(--n-surface-2)', position: 'relative', cursor: photos[i] ? 'zoom-in' : 'default' }}>
             {i === 4 && photos.length > 5 && (
               <div style={{ position: 'absolute', inset: 0, background: 'rgba(21,18,14,0.55)', borderRadius: 14, display: 'grid', placeItems: 'center', color: '#f6f3ee', fontWeight: 500 }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="camera" /> +{photos.length - 4} photos</span>
@@ -185,6 +283,27 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
           </div>
         ))}
       </div>
+
+      {/* Lightbox */}
+      {lightbox !== null && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setLightbox(null)}
+        >
+          <button onClick={e => { e.stopPropagation(); setLightbox(i => i !== null && i > 0 ? i - 1 : i); }}
+            style={{ position: 'absolute', left: 20, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 999, width: 44, height: 44, cursor: 'pointer', color: '#fff', fontSize: 20, display: 'grid', placeItems: 'center' }}>‹</button>
+          <img
+            src={photos[lightbox]?.url}
+            alt=""
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '88vw', maxHeight: '88vh', borderRadius: 12, objectFit: 'contain', boxShadow: '0 24px 64px rgba(0,0,0,0.6)' }}
+          />
+          <button onClick={e => { e.stopPropagation(); setLightbox(i => i !== null && i < photos.length - 1 ? i + 1 : i); }}
+            style={{ position: 'absolute', right: 20, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 999, width: 44, height: 44, cursor: 'pointer', color: '#fff', fontSize: 20, display: 'grid', placeItems: 'center' }}>›</button>
+          <div style={{ position: 'absolute', bottom: 20, color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>{lightbox + 1} / {photos.length}</div>
+          <button onClick={() => setLightbox(null)} style={{ position: 'absolute', top: 16, right: 16, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 999, width: 36, height: 36, cursor: 'pointer', color: '#fff', fontSize: 18, display: 'grid', placeItems: 'center' }}>×</button>
+        </div>
+      )}
 
       {/* Main body */}
       <div style={{ padding: '32px 40px 56px', display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 40 }}>
@@ -278,24 +397,95 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
             </div>
           )}
 
-          {/* Location map placeholder */}
+          {/* Location map */}
           <div style={{ marginTop: 32 }}>
             <h3 className="n-display" style={{ fontSize: 26, margin: '0 0 12px' }}>In the neighbourhood</h3>
-            <div className="n-card" style={{ height: 260, padding: 0, overflow: 'hidden', position: 'relative' }}>
-              <svg viewBox="0 0 800 260" style={{ width: '100%', height: '100%' }}>
-                <rect width="800" height="260" fill="var(--n-surface-2)" />
-                <path d="M-20 140 C 180 100 380 180 580 120 S 820 160 820 140" stroke="var(--n-line-2)" strokeWidth="14" fill="none" opacity=".6" />
-                <path d="M240 -20 C 260 80 320 160 280 260" stroke="var(--n-line-2)" strokeWidth="10" fill="none" opacity=".5" />
-                <rect x="80" y="60" width="120" height="70" fill="var(--n-line)" opacity=".35" rx="6" />
-                <rect x="420" y="40" width="140" height="80" fill="var(--n-line)" opacity=".35" rx="6" />
-                <rect x="560" y="160" width="160" height="70" fill="var(--n-line)" opacity=".35" rx="6" />
-              </svg>
-              <div style={{ position: 'absolute', left: '46%', top: '44%', transform: 'translate(-50%, -100%)' }}>
-                <div style={{ background: 'var(--n-ink)', color: 'var(--n-bg)', padding: '6px 12px', borderRadius: 999, fontWeight: 600, fontSize: 13 }}>
-                  {p.locality}
+            <div className="n-card" style={{ height: 280, padding: 0, overflow: 'hidden' }}>
+              {p.latitude && p.longitude ? (
+                <PropertyMap lat={p.latitude} lng={p.longitude} label={p.locality} />
+              ) : (
+                <div style={{ height: '100%', display: 'grid', placeItems: 'center', background: 'var(--n-surface-2)', color: 'var(--n-muted)' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <Icon name="pin" className="n-ico xl" style={{ display: 'block', margin: '0 auto 8px' }} />
+                    <span className="n-mono">{p.locality}, {p.city}</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+          </div>
+
+          {/* Reviews */}
+          <div style={{ marginTop: 40 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 20 }}>
+              <h3 className="n-display" style={{ fontSize: 26, margin: 0 }}>Reviews</h3>
+              {reviewAvg !== null && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 22, fontWeight: 700 }}>{reviewAvg}</span>
+                  <span style={{ color: 'var(--n-warn)', fontSize: 18 }}>{'★'.repeat(Math.round(reviewAvg))}{'☆'.repeat(5 - Math.round(reviewAvg))}</span>
+                  <span style={{ color: 'var(--n-muted)', fontSize: 13 }}>({reviews.length})</span>
+                </div>
+              )}
+            </div>
+
+            {/* Write a review */}
+            {user && !reviewDone && !reviews.find(r => r.author.id === user.id) && (
+              <div className="n-card" style={{ padding: 20, marginBottom: 24 }}>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 10 }}>Leave a review</div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+                  {[1,2,3,4,5].map(s => (
+                    <button key={s} onClick={() => setReviewRating(s)}
+                      style={{ fontSize: 26, background: 'none', border: 'none', cursor: 'pointer', color: s <= reviewRating ? 'var(--n-warn)' : 'var(--n-line-2)', padding: '0 2px', lineHeight: 1 }}>
+                      ★
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={reviewComment}
+                  onChange={e => setReviewComment(e.target.value)}
+                  placeholder="Share your experience with this property or landlord…"
+                  rows={3}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 14, resize: 'vertical', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
+                />
+                {reviewError && <div style={{ color: 'var(--n-danger)', fontSize: 13, marginBottom: 8 }}>{reviewError}</div>}
+                <button onClick={submitReview} disabled={reviewRating === 0 || reviewSubmitting} className="n-btn accent sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {reviewSubmitting ? 'Submitting…' : 'Submit review'}
+                </button>
+              </div>
+            )}
+            {reviewDone && (
+              <div className="n-card" style={{ padding: 16, marginBottom: 24, background: 'var(--n-accent-soft)', borderColor: 'transparent' }}>
+                <span style={{ color: 'var(--n-accent-ink)', fontSize: 14, fontWeight: 500 }}>✓ Review submitted — thank you!</span>
+              </div>
+            )}
+
+            {/* Review list */}
+            {reviews.length === 0 ? (
+              <div style={{ color: 'var(--n-muted)', fontSize: 14, padding: '16px 0' }}>No reviews yet. Be the first to review.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {reviews.map(r => (
+                  <div key={r.id} className="n-card" style={{ padding: '16px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 999, background: 'var(--n-bg-2)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13 }}>
+                          {(r.author.name ?? 'A')[0].toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 500 }}>{r.author.name ?? 'Anonymous'}</div>
+                          <div className="n-mono" style={{ color: 'var(--n-muted)', fontSize: 10 }}>
+                            {new Date(r.createdAt).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </div>
+                        </div>
+                      </div>
+                      <span style={{ color: 'var(--n-warn)', fontSize: 16, letterSpacing: 1 }}>
+                        {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
+                      </span>
+                    </div>
+                    {r.comment && <p style={{ fontSize: 14, color: 'var(--n-ink-2)', lineHeight: 1.6, margin: 0 }}>{r.comment}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -347,6 +537,7 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
                 <div className="n-mono" style={{ color: 'var(--n-muted)', marginTop: 2 }}>
                   Landlord · {p.landlord.verificationTier} · Since {landlordSince}
                 </div>
+                <Link href={`/landlord/${p.landlord.id}`} style={{ fontSize: 12, color: 'var(--n-accent-ink)', marginTop: 4, display: 'inline-block' }}>View profile →</Link>
               </div>
             </div>
 
@@ -355,12 +546,22 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
               <button onClick={() => setMsgModal(true)} className="n-btn accent" style={{ height: 48, justifyContent: 'center', fontSize: 15 }}>
                 <Icon name="chat" /> Message landlord
               </button>
-              <button className="n-btn primary" style={{ height: 44, justifyContent: 'center' }}>
+              <button onClick={() => user ? setViewModal(true) : setMsgModal(true)} className="n-btn primary" style={{ height: 44, justifyContent: 'center' }}>
                 <Icon name="calendar" /> Request viewing
               </button>
-              <button className="n-btn ghost" style={{ height: 44, justifyContent: 'center' }}>
+              <button onClick={() => user ? setInspModal(true) : setMsgModal(true)} className="n-btn ghost" style={{ height: 44, justifyContent: 'center' }}>
                 <Icon name="stamp" /> Request inspection · ₨ 1,800
               </button>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(`Check out this rental on Nivaas: ${p.title} in ${p.locality}, ${p.city} — ₨${p.rentAmount.toLocaleString()}/month\n\nhttps://nivaas.pk/property/${p.id}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="n-btn ghost"
+                style={{ height: 40, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                Share on WhatsApp
+              </a>
             </div>
 
             <div className="n-mono" style={{ color: 'var(--n-muted-2)', textAlign: 'center', marginTop: 14, lineHeight: 1.5 }}>
@@ -407,6 +608,112 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
                 {sending ? 'Sending…' : <><Icon name="chat" /> Send message</>}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Viewing request modal ── */}
+      {viewModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={() => setViewModal(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} />
+          <div className="n-card" style={{ position: 'relative', width: 440, padding: 32, zIndex: 1 }}>
+            <button onClick={() => setViewModal(false)} style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n-muted)' }}>
+              <Icon name="close" className="n-ico lg" />
+            </button>
+            <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Schedule</div>
+            <h2 className="n-display" style={{ fontSize: 28, margin: '0 0 4px' }}>Request a viewing</h2>
+            <div style={{ fontSize: 13, color: 'var(--n-muted)', marginBottom: 24 }}>{p.title}</div>
+
+            {viewDone ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
+                <div style={{ fontWeight: 600 }}>Viewing request sent!</div>
+                <div style={{ color: 'var(--n-muted)', fontSize: 13, marginTop: 6 }}>The landlord will confirm via messages.</div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 16 }}>
+                <div>
+                  <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Preferred date</div>
+                  <input type="date" value={viewDate} min={new Date().toISOString().split('T')[0]} onChange={e => setViewDate(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Preferred time</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                    {['09:00','10:00','11:00','12:00','14:00','15:00','16:00','17:00'].map(t => (
+                      <button key={t} onClick={() => setViewTime(t)} style={{ padding: '8px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--mono)', border: `1px solid ${viewTime === t ? 'var(--n-accent)' : 'var(--n-line)'}`, background: viewTime === t ? 'var(--n-accent-soft)' : 'var(--n-surface-2)', color: viewTime === t ? 'var(--n-accent-ink)' : 'var(--n-muted)' }}>{t}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Note (optional)</div>
+                  <textarea value={viewNote} onChange={e => setViewNote(e.target.value)} placeholder="e.g. Coming with family, need parking…" rows={2}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 14, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                  <button onClick={() => setViewModal(false)} className="n-btn ghost" style={{ flex: 1, justifyContent: 'center' }}>Cancel</button>
+                  <button onClick={requestViewing} disabled={!viewDate || viewSending} className="n-btn accent" style={{ flex: 2, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {viewSending ? 'Sending…' : <><Icon name="calendar" /> Send request</>}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Inspection request modal ── */}
+      {inspModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={() => setInspModal(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} />
+          <div className="n-card" style={{ position: 'relative', width: 420, padding: 32, zIndex: 1 }}>
+            <button onClick={() => setInspModal(false)} style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n-muted)' }}>
+              <Icon name="close" className="n-ico lg" />
+            </button>
+            <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Professional inspection</div>
+            <h2 className="n-display" style={{ fontSize: 28, margin: '0 0 4px' }}>Request inspection</h2>
+            <div style={{ fontSize: 13, color: 'var(--n-muted)', marginBottom: 24 }}>{p.title}</div>
+
+            {inspDone ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
+                <div style={{ fontWeight: 600 }}>Inspection requested!</div>
+                <div style={{ color: 'var(--n-muted)', fontSize: 13, marginTop: 6 }}>An inspector will be assigned within 24 hours.</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: 16 }}>
+                  <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 8 }}>Inspection type</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                    {([['GENERAL', 'General'], ['MOVE_IN', 'Move-in'], ['MOVE_OUT', 'Move-out']] as const).map(([val, label]) => (
+                      <button key={val} onClick={() => setInspType(val)} style={{ padding: '10px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', border: `1.5px solid ${inspType === val ? 'var(--n-accent)' : 'var(--n-line)'}`, background: inspType === val ? 'var(--n-accent-soft)' : 'var(--n-surface-2)', color: inspType === val ? 'var(--n-accent-ink)' : 'var(--n-muted)', fontWeight: inspType === val ? 600 : 400 }}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: 10, background: 'var(--n-surface-2)', marginBottom: 16 }}>
+                  <span style={{ fontSize: 14 }}>Inspection fee</span>
+                  <span className="n-display" style={{ fontSize: 22 }}>₨ 1,800</span>
+                </div>
+
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 8 }}>Pay via</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 20 }}>
+                  {(['JAZZCASH', 'EASYPAISA', 'CARD'] as const).map(g => (
+                    <button key={g} onClick={() => setInspGateway(g)} style={{ padding: '10px 0', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--mono)', border: `1.5px solid ${inspGateway === g ? 'var(--n-accent)' : 'var(--n-line)'}`, background: inspGateway === g ? 'var(--n-accent-soft)' : 'var(--n-surface-2)', color: inspGateway === g ? 'var(--n-accent-ink)' : 'var(--n-muted)', fontWeight: inspGateway === g ? 600 : 400 }}>
+                      {g === 'JAZZCASH' ? 'JazzCash' : g === 'EASYPAISA' ? 'Easypaisa' : 'Card'}
+                    </button>
+                  ))}
+                </div>
+
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => setInspModal(false)} className="n-btn ghost" style={{ flex: 1, justifyContent: 'center' }}>Cancel</button>
+                  <button onClick={requestInspection} disabled={inspSending} className="n-btn accent" style={{ flex: 2, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {inspSending ? 'Processing…' : <><Icon name="stamp" /> Pay &amp; request</>}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getSession } from '@/lib/auth';
+import { notify } from '@/lib/notify';
 import { z } from 'zod';
 
 const createSchema = z.object({
@@ -76,6 +77,36 @@ export async function POST(req: NextRequest) {
   const listing = await prisma.listing.create({
     data: { ...parsed.data, landlordId: session.userId, status: 'DRAFT' },
   });
+
+  // Notify users whose saved searches match this listing
+  const matchingSearches = await prisma.savedSearch.findMany({
+    where: {
+      city: { equals: parsed.data.city, mode: 'insensitive' },
+      userId: { not: session.userId },
+      AND: [
+        parsed.data.rentAmount
+          ? { OR: [{ maxRent: null }, { maxRent: { gte: parsed.data.rentAmount } }] }
+          : {},
+        parsed.data.rooms
+          ? { OR: [{ minRooms: null }, { minRooms: { lte: parsed.data.rooms } }] }
+          : {},
+        parsed.data.propertyType
+          ? { OR: [{ propType: null }, { propType: parsed.data.propertyType }] }
+          : {},
+      ],
+    },
+  });
+
+  await Promise.all(
+    matchingSearches.map((s: { userId: string; label: string | null }) =>
+      notify(
+        s.userId,
+        'New listing matches your search',
+        `A new ${parsed.data.propertyType} in ${parsed.data.city} matches your saved search${s.label ? ` "${s.label}"` : ''}.`,
+        `/property/${listing.id}`
+      )
+    )
+  );
 
   return NextResponse.json({ listing }, { status: 201 });
 }

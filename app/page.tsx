@@ -3,10 +3,11 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import TopBar from '@/components/ui/TopBar';
+import OnboardingBanner from '@/components/ui/OnboardingBanner';
 import Logo from '@/components/ui/Logo';
 import Icon from '@/components/ui/Icon';
 import TrustBadge from '@/components/ui/TrustBadge';
-import TrustScore from '@/components/ui/TrustScore';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { CITIES } from '@/lib/data';
 
 type ApiListing = {
@@ -26,25 +27,12 @@ type ApiListing = {
   landlord: { name: string; verificationTier: string };
 };
 
-function trustScore(l: ApiListing) {
-  let s = 40;
-  if (l.landlord.verificationTier === 'VERIFIED') s += 25;
-  else if (l.landlord.verificationTier === 'STANDARD') s += 10;
-  if (l.ownerVerified) s += 20;
-  if (l.photos.length > 0) s += 10;
-  return Math.min(s, 95);
-}
-
 function badgesFor(l: ApiListing): string[] {
   const b: string[] = [];
   if (l.landlord.verificationTier === 'VERIFIED') b.push('nadra');
   if (l.ownerVerified) b.push('owner');
   if (l.isBoosted) b.push('boost');
   return b;
-}
-
-function daysSince(date: string) {
-  return Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
 }
 
 function areaStr(l: ApiListing) {
@@ -54,228 +42,221 @@ function areaStr(l: ApiListing) {
 }
 
 export default function Home() {
-  const [activeCity, setActiveCity] = useState('Sialkot');
+  const { user } = useAuth();
+  const [searchCity, setSearchCity] = useState('');
+  const [maxRent, setMaxRent] = useState('');
+  const [rooms, setRooms] = useState('');
   const [featured, setFeatured] = useState<ApiListing[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [cityCounts, setCityCounts] = useState<Record<string, number>>({});
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  function buildSearchUrl() {
+    const p = new URLSearchParams();
+    if (searchCity) p.set('city', searchCity);
+    if (maxRent) p.set('maxRent', maxRent);
+    if (rooms) p.set('rooms', rooms);
+    const qs = p.toString();
+    return qs ? `/search?${qs}` : '/search';
+  }
+
+  useEffect(() => {
+    fetch('/api/listings/counts')
+      .then(r => r.json())
+      .then(d => setCityCounts(d.counts ?? {}))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    fetch('/api/saved')
+      .then(r => r.json())
+      .then(d => setSavedIds(new Set((d.listings ?? []).map((l: { id: string }) => l.id))))
+      .catch(() => {});
+  }, [user]);
+
+  async function toggleSave(e: React.MouseEvent, listingId: string) {
+    e.preventDefault();
+    if (!user || savingId === listingId) return;
+    setSavingId(listingId);
+    const isSaved = savedIds.has(listingId);
+    setSavedIds(prev => { const n = new Set(prev); isSaved ? n.delete(listingId) : n.add(listingId); return n; });
+    await fetch(`/api/listings/${listingId}/save`, { method: isSaved ? 'DELETE' : 'POST' }).catch(() => {
+      setSavedIds(prev => { const n = new Set(prev); isSaved ? n.add(listingId) : n.delete(listingId); return n; });
+    });
+    setSavingId(null);
+  }
 
   useEffect(() => {
     setFeaturedLoading(true);
-    fetch(`/api/listings?city=${encodeURIComponent(activeCity)}&limit=3`)
+    fetch('/api/listings?limit=6&sort=newest')
       .then(r => r.json())
       .then(d => setFeatured(d.listings ?? []))
       .catch(() => setFeatured([]))
       .finally(() => setFeaturedLoading(false));
-  }, [activeCity]);
+  }, []);
 
   return (
     <div className="n-root">
       <TopBar />
+      <OnboardingBanner />
 
-      {/* Hero */}
-      <div style={{ padding: '56px 40px 32px', display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 48, alignItems: 'end' }}>
-        <div>
-          <span className="n-mono" style={{ color: 'var(--n-muted)' }}>A rental marketplace for Punjab · Est. 2026</span>
-          <h1 className="n-display" style={{ fontSize: 'clamp(52px, 6.5vw, 92px)', lineHeight: 0.95, letterSpacing: '-0.025em', margin: '18px 0 20px' }}>
-            Rentals you can{' '}
-            <em style={{ color: 'var(--n-accent)' }}>actually trust</em>,<br />
-            in the cities you <em>actually live in</em>.
-          </h1>
-          <p style={{ fontSize: 18, lineHeight: 1.5, color: 'var(--n-muted)', maxWidth: 620, margin: 0 }}>
-            Every listing comes NADRA-verified, owner-confirmed, and — if you want — professionally inspected.
-            Built first for Sialkot, Gujranwala, Sargodha, Narowal, Nankana Sahib and Hafizabad.
-          </p>
+      {/* ── Hero ── */}
+      <div style={{
+        background: 'var(--n-bg)',
+        borderBottom: '1px solid var(--n-line)',
+        padding: 'clamp(48px, 7vw, 88px) 40px clamp(40px, 5vw, 64px)',
+        textAlign: 'center',
+      }}>
+        <div className="n-chip" style={{ marginBottom: 20, display: 'inline-flex' }}>
+          <Icon name="shield" style={{ width: 12, height: 12 }} /> Punjab&apos;s verified rental marketplace
         </div>
+        <h1 className="n-display" style={{
+          fontSize: 'clamp(36px, 5.5vw, 72px)', lineHeight: 1.04, letterSpacing: '-0.03em',
+          color: 'var(--n-ink)', margin: '0 auto 18px', maxWidth: 820,
+        }}>
+          Rent a home you can{' '}
+          <em style={{ color: 'var(--n-accent)', fontStyle: 'italic' }}>actually trust</em>
+        </h1>
+        <p style={{ fontSize: 16, color: 'var(--n-muted)', maxWidth: 480, margin: '0 auto 36px', lineHeight: 1.65 }}>
+          NADRA-verified landlords, owner-confirmed listings, and professional inspections — across six Punjab cities.
+        </p>
 
-        <div className="n-card" style={{ padding: 24, display: 'grid', gridTemplateColumns: '64px 1fr', gap: 20, alignItems: 'center' }}>
-          <TrustScore value={92} />
-          <div>
-            <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>The Nivaas Trust Score</div>
-            <div style={{ fontSize: 15, lineHeight: 1.45 }}>
-              Every listing is scored across identity, ownership, photos, and utility inspection — so you know what you&apos;re walking into before the viewing.
-            </div>
+        {/* Search bar — desktop */}
+        <div className="n-hide-mobile" style={{
+          maxWidth: 720, margin: '0 auto',
+          background: 'var(--n-surface)',
+          border: '1px solid var(--n-line)',
+          borderRadius: 16, padding: 6,
+          display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.8fr auto', gap: 0,
+          boxShadow: '0 4px 24px rgba(21,18,14,0.08)',
+        }}>
+          <div style={{ padding: '10px 18px', borderRight: '1px solid var(--n-line)' }}>
+            <div style={{ fontSize: 10, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--n-muted-2)', marginBottom: 4 }}>City</div>
+            <select value={searchCity} onChange={e => setSearchCity(e.target.value)}
+              style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>
+              <option value="">All cities</option>
+              {CITIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
           </div>
-        </div>
-      </div>
-
-      {/* Mega search bar */}
-      <div style={{ padding: '0 40px 28px' }}>
-        <div className="n-card" style={{ padding: 10, display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr auto', gap: 2, alignItems: 'stretch', borderRadius: 20 }}>
-          {([
-            { label: 'City',     value: activeCity,          hint: 'Punjab · Tier 2/3' },
-            { label: 'Locality', value: 'Any area',          hint: 'Neighbourhood' },
-            { label: 'Rent',     value: 'Up to PKR 80,000',  hint: 'Monthly' },
-            { label: 'Bedrooms', value: '2+',                hint: 'Rooms' },
-          ] as const).map((f, i) => (
-            <div key={i} style={{ padding: '12px 18px', borderRight: i < 3 ? '1px solid var(--n-line)' : 'none', cursor: 'pointer' }}>
-              <div className="n-mono" style={{ color: 'var(--n-muted)', fontSize: 9.5 }}>{f.label}</div>
-              <div style={{ fontSize: 15, fontWeight: 500, marginTop: 4 }}>{f.value}</div>
-              <div style={{ fontSize: 11, color: 'var(--n-muted-2)', marginTop: 2 }}>{f.hint}</div>
-            </div>
-          ))}
-          <Link href={`/search?city=${encodeURIComponent(activeCity)}`} className="n-btn accent" style={{ height: 'auto', padding: '0 28px', borderRadius: 14, margin: 2, justifyContent: 'center' }}>
-            <Icon name="search" /> Find homes
+          <div style={{ padding: '10px 18px', borderRight: '1px solid var(--n-line)' }}>
+            <div style={{ fontSize: 10, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--n-muted-2)', marginBottom: 4 }}>Max rent</div>
+            <select value={maxRent} onChange={e => setMaxRent(e.target.value)}
+              style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>
+              <option value="">Any budget</option>
+              <option value="20000">Under ₨20k</option>
+              <option value="40000">Under ₨40k</option>
+              <option value="60000">Under ₨60k</option>
+              <option value="80000">Under ₨80k</option>
+              <option value="120000">Under ₨1.2L</option>
+            </select>
+          </div>
+          <div style={{ padding: '10px 18px' }}>
+            <div style={{ fontSize: 10, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--n-muted-2)', marginBottom: 4 }}>Bedrooms</div>
+            <select value={rooms} onChange={e => setRooms(e.target.value)}
+              style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>
+              <option value="">Any</option>
+              <option value="1">1+</option>
+              <option value="2">2+</option>
+              <option value="3">3+</option>
+              <option value="4">4+</option>
+            </select>
+          </div>
+          <Link href={buildSearchUrl()} className="n-btn accent" style={{ height: 'auto', padding: '0 28px', margin: 0, justifyContent: 'center', borderRadius: 11, fontSize: 15 }}>
+            <Icon name="search" /> Search
           </Link>
         </div>
 
-        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="n-mono" style={{ color: 'var(--n-muted)', marginRight: 4 }}>Quick filters</span>
+        {/* Mobile search */}
+        <Link href={buildSearchUrl()} className="n-btn accent n-show-mobile" style={{ display: 'none', justifyContent: 'center', height: 50, fontSize: 16, borderRadius: 14, margin: '0 auto', padding: '0 32px' }}>
+          <Icon name="search" /> Search{searchCity ? ` in ${searchCity}` : ''}
+        </Link>
+
+        {/* Quick filter chips */}
+        <div style={{ marginTop: 18, display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
           {[
-            { label: 'NADRA-verified only', q: '?verifiedOnly=true' },
+            { label: 'NADRA verified', q: '?verifiedOnly=true' },
             { label: 'Furnished', q: '?furnishing=Furnished' },
-            { label: 'Under ₨30,000', q: '?maxRent=30000' },
+            { label: 'Under ₨30k', q: '?maxRent=30000' },
             { label: 'Family homes', q: '?type=House' },
             { label: 'Studios', q: '?type=Studio' },
           ].map(t => (
-            <Link key={t.label} href={`/search${t.q}`} className="n-chip" style={{ cursor: 'pointer' }}>{t.label}</Link>
+            <Link key={t.label} href={`/search${t.q}`} className="n-chip" style={{ cursor: 'pointer', fontSize: 13, height: 30, padding: '0 14px' }}>
+              {t.label}
+            </Link>
           ))}
         </div>
       </div>
 
-      {/* City picker */}
-      <div style={{ padding: '40px 40px 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 18 }}>
+      {/* ── Featured listings ── */}
+      <div style={{ padding: '40px 40px 48px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
-            <div className="n-mono" style={{ color: 'var(--n-muted)' }}>01 · Live in</div>
-            <h2 className="n-display" style={{ fontSize: 40, margin: '4px 0 0', letterSpacing: '-0.02em' }}>Six cities, fully covered.</h2>
+            <div className="n-mono" style={{ color: 'var(--n-muted)' }}>Latest listings</div>
+            <h2 className="n-display" style={{ fontSize: 36, margin: '4px 0 0', letterSpacing: '-0.02em' }}>New this week.</h2>
           </div>
-          <Link href="/search" style={{ fontSize: 14, color: 'var(--n-muted)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            All cities <Icon name="arrow" />
-          </Link>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
-          {CITIES.map(c => {
-            const active = activeCity === c.name;
-            return (
-              <div
-                key={c.name}
-                onClick={() => setActiveCity(c.name)}
-                className="n-card"
-                style={{
-                  padding: 0, cursor: 'pointer', overflow: 'hidden',
-                  border: active ? '1px solid var(--n-ink)' : '1px solid var(--n-line)',
-                  boxShadow: active ? '0 0 0 3px var(--n-bg-2), 0 20px 50px -30px rgba(0,0,0,.3)' : 'var(--n-shadow)',
-                  transition: 'all .2s',
-                }}
-              >
-                <div style={{ height: 112, background: `url(${c.hero}) center/cover`, position: 'relative' }}>
-                  <span className="n-chip" style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(21,18,14,0.7)', color: '#f6f3ee', border: 'none', backdropFilter: 'blur(6px)' }}>
-                    Tier {c.tier}
-                  </span>
-                </div>
-                <div style={{ padding: '12px 14px 14px' }}>
-                  <div style={{ fontSize: 15, fontWeight: 500 }}>{c.name}</div>
-                  <div className="n-mono" style={{ color: 'var(--n-muted)', marginTop: 4 }}>{c.listings.toLocaleString()} listings</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Three pillars */}
-      <div style={{ padding: '32px 40px 48px' }}>
-        <div style={{ marginBottom: 18 }}>
-          <div className="n-mono" style={{ color: 'var(--n-muted)' }}>02 · What makes it different</div>
-          <h2 className="n-display" style={{ fontSize: 40, margin: '4px 0 0', letterSpacing: '-0.02em' }}>Three checks before you move in.</h2>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-          {([
-            { n: '01', icon: 'shield' as const, title: 'Identity, verified by NADRA',
-              body: 'Every landlord and tenant is matched against the national registry. Standard and Verified tiers are shown on every profile.',
-              stat: '3-tier', statLabel: 'verification ladder' },
-            { n: '02', icon: 'stamp' as const, title: 'Ownership, confirmed',
-              body: 'Admin-reviewed ownership docs — Fard, registry, allotment letter — before any listing goes live. Approved within 48h.',
-              stat: '< 48h', statLabel: 'review window' },
-            { n: '03', icon: 'check' as const, title: 'Utilities, inspected in person',
-              body: 'A local Nivaas inspector visits, tests gas, electrical, plumbing, structural. You get a timestamped PDF report you can save offline.',
-              stat: '4', statLabel: 'utility categories' },
-          ]).map(p => (
-            <div key={p.n} className="n-card" style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 16, minHeight: 280 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span className="n-mono" style={{ color: 'var(--n-muted)' }}>{p.n}</span>
-                <Icon name={p.icon} className="n-ico xl" />
-              </div>
-              <h3 className="n-display" style={{ fontSize: 28, lineHeight: 1.1, margin: 0, letterSpacing: '-0.01em' }}>{p.title}</h3>
-              <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--n-muted)', margin: 0 }}>{p.body}</p>
-              <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid var(--n-line)', display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                <span className="n-display" style={{ fontSize: 32, letterSpacing: '-0.02em' }}>{p.stat}</span>
-                <span className="n-mono" style={{ color: 'var(--n-muted)' }}>{p.statLabel}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Featured strip */}
-      <div style={{ padding: '24px 40px 64px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 18 }}>
-          <div>
-            <div className="n-mono" style={{ color: 'var(--n-muted)' }}>03 · Freshly verified in {activeCity}</div>
-            <h2 className="n-display" style={{ fontSize: 40, margin: '4px 0 0', letterSpacing: '-0.02em' }}>New this week.</h2>
-          </div>
-          <Link href={`/search?city=${encodeURIComponent(activeCity)}`} className="n-btn ghost sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            View all <Icon name="arrow" />
+          <Link href="/search" className="n-btn ghost sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Browse all <Icon name="arrow" />
           </Link>
         </div>
 
         {featuredLoading ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} className="n-card" style={{ height: 360, opacity: 0.4 }} />
+          <div className="n-grid-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+            {[0, 1, 2, 3, 4, 5].map(i => (
+              <div key={i} className="n-card" style={{ height: 340, opacity: 0.35 }} />
             ))}
           </div>
         ) : featured.length === 0 ? (
-          <div className="n-card" style={{ padding: 48, textAlign: 'center' }}>
-            <Icon name="home" className="n-ico xl" style={{ color: 'var(--n-muted)', margin: '0 auto 12px' }} />
-            <div style={{ color: 'var(--n-muted)', marginBottom: 16 }}>No listings in {activeCity} yet — be the first.</div>
+          <div className="n-card" style={{ padding: 56, textAlign: 'center' }}>
+            <Icon name="home" className="n-ico xl" style={{ color: 'var(--n-muted)', margin: '0 auto 14px', display: 'block' }} />
+            <div style={{ color: 'var(--n-muted)', marginBottom: 20, fontSize: 15 }}>No listings yet — be the first.</div>
             <Link href="/list-property" className="n-btn primary sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <Icon name="plus" /> List a property
             </Link>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+          <div className="n-grid-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
             {featured.map(p => (
               <Link key={p.id} href={`/property/${p.id}`} className="n-card" style={{ overflow: 'hidden', padding: 0, display: 'block', textDecoration: 'none' }}>
-                <div style={{ position: 'relative', height: 220, background: p.photos[0] ? `url(${p.photos[0].url}) center/cover` : 'var(--n-surface-2)' }}>
+                <div style={{ position: 'relative', height: 240, background: p.photos[0] ? `url(${p.photos[0].url}) center/cover` : 'var(--n-surface-2)' }}>
                   {!p.photos[0] && (
                     <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
                       <Icon name="camera" className="n-ico xl" style={{ color: 'var(--n-muted)' }} />
                     </div>
                   )}
-                  <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 6 }}>
+                  {p.photos[0] && (
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 55%)' }} />
+                  )}
+                  <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 5 }}>
                     {badgesFor(p).includes('nadra') && <TrustBadge kind="nadra" size="sm" />}
+                    {badgesFor(p).includes('boost') && <TrustBadge kind="boost" size="sm" />}
                   </div>
                   <button
-                    onClick={e => e.preventDefault()}
-                    style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 999, border: 'none', background: 'rgba(255,255,255,0.9)', display: 'grid', placeItems: 'center', cursor: 'pointer' }}
+                    onClick={e => toggleSave(e, p.id)}
+                    style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 999, border: 'none', background: 'rgba(255,255,255,0.92)', display: 'grid', placeItems: 'center', cursor: 'pointer', color: savedIds.has(p.id) ? 'var(--n-danger)' : 'var(--n-muted)' }}
                   >
                     <Icon name="heart" />
                   </button>
+                  {p.photos[0] && (
+                    <div style={{ position: 'absolute', bottom: 14, left: 14 }}>
+                      <span className="n-display" style={{ fontSize: 22, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>₨ {p.rentAmount.toLocaleString()}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginLeft: 4 }}>/mo</span>
+                    </div>
+                  )}
                 </div>
-                <div style={{ padding: 18 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 16, fontWeight: 500, letterSpacing: '-0.01em' }}>{p.title}</div>
-                      <div style={{ fontSize: 13, color: 'var(--n-muted)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Icon name="pin" style={{ width: 12, height: 12 }} className="n-ico" />{p.locality}
-                      </div>
-                    </div>
-                    <TrustScore value={trustScore(p)} size={44} />
+                <div style={{ padding: '16px 18px' }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em', marginBottom: 4, lineHeight: 1.3 }}>{p.title}</div>
+                  <div style={{ fontSize: 13, color: 'var(--n-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="pin" style={{ width: 12, height: 12 }} className="n-ico" />{p.locality}, {p.city}
                   </div>
-                  <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 14, color: 'var(--n-muted)', fontSize: 13 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="bed" /> {p.rooms}</span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="bath" /> {p.bathrooms}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, color: 'var(--n-muted)', fontSize: 13 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="bed" /> {p.rooms} bed</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="bath" /> {p.bathrooms} bath</span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="square" /> {areaStr(p)}</span>
-                  </div>
-                  <div className="n-divider" style={{ margin: '14px 0' }} />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <span className="n-display" style={{ fontSize: 26 }}>₨ {p.rentAmount.toLocaleString()}</span>
-                      <span style={{ color: 'var(--n-muted)', fontSize: 13, marginLeft: 4 }}>/mo</span>
-                    </div>
-                    <span className="n-mono" style={{ color: 'var(--n-muted)' }}>{daysSince(p.createdAt)}d ago</span>
+                    {!p.photos[0] && (
+                      <span className="n-display" style={{ marginLeft: 'auto', fontSize: 20 }}>₨ {p.rentAmount.toLocaleString()}<span style={{ fontSize: 13, fontFamily: 'inherit', color: 'var(--n-muted)', fontWeight: 400 }}>/mo</span></span>
+                    )}
                   </div>
                 </div>
               </Link>
@@ -284,16 +265,50 @@ export default function Home() {
         )}
       </div>
 
-      {/* Footer */}
-      <div style={{ padding: '32px 40px', borderTop: '1px solid var(--n-line)', color: 'var(--n-muted)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* ── Browse by city ── */}
+      <div style={{ padding: '0 40px 48px', borderTop: '1px solid var(--n-line)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', margin: '40px 0 18px' }}>
+          <div>
+            <div className="n-mono" style={{ color: 'var(--n-muted)' }}>Browse by city</div>
+            <h2 className="n-display" style={{ fontSize: 36, margin: '4px 0 0', letterSpacing: '-0.02em' }}>Six cities, fully covered.</h2>
+          </div>
+          <Link href="/search" style={{ fontSize: 14, color: 'var(--n-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            All listings <Icon name="arrow" />
+          </Link>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+          {CITIES.map(c => (
+            <Link
+              key={c.name}
+              href={`/search?city=${encodeURIComponent(c.name)}`}
+              className="n-card hoverable"
+              style={{ padding: 0, overflow: 'hidden', display: 'block', textDecoration: 'none' }}
+            >
+              <div style={{ height: 100, background: `url(${c.hero}) center/cover`, position: 'relative' }}>
+                <span className="n-chip" style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(21,18,14,0.7)', color: '#f6f3ee', border: 'none', backdropFilter: 'blur(6px)', fontSize: 11 }}>
+                  Tier {c.tier}
+                </span>
+              </div>
+              <div style={{ padding: '10px 12px 12px' }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{c.name}</div>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginTop: 3, fontSize: 10 }}>{(cityCounts[c.name] ?? 0).toLocaleString()} listings</div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Footer ── */}
+      <div style={{ padding: '28px 40px', color: 'var(--n-muted)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
           <Logo size={16} />
           <span>© 2026 Nivaas · An Abstrak Digital product</span>
         </div>
         <div style={{ display: 'flex', gap: 24 }}>
-          <span style={{ cursor: 'pointer' }}>Terms</span>
-          <span style={{ cursor: 'pointer' }}>Privacy</span>
-          <span style={{ cursor: 'pointer' }}>Help</span>
+          <Link href="/terms" style={{ color: 'var(--n-muted)' }}>Terms</Link>
+          <Link href="/privacy" style={{ color: 'var(--n-muted)' }}>Privacy</Link>
+          <Link href="/how-it-works" style={{ color: 'var(--n-muted)' }}>Help</Link>
         </div>
       </div>
     </div>

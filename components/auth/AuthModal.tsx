@@ -13,10 +13,12 @@ interface AuthModalProps {
 export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
   const [step, setStep] = useState<Step>('phone');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [role, setRole] = useState<'TENANT' | 'LANDLORD'>('TENANT');
   const [name, setName] = useState('');
   const [devOtp, setDevOtp] = useState('');
+  const [otpSentTo, setOtpSentTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -27,11 +29,12 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, ...(email && { email }) }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error); return; }
       if (data._dev_otp) setDevOtp(data._dev_otp);
+      setOtpSentTo(email || phone);
       setStep('otp');
     } finally {
       setLoading(false);
@@ -91,7 +94,7 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
             <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Welcome to</div>
             <h2 className="n-display" style={{ fontSize: 36, margin: '0 0 24px', letterSpacing: '-0.02em' }}>Nivaas</h2>
             <p style={{ fontSize: 14, color: 'var(--n-muted)', marginBottom: 20 }}>Enter your Pakistani mobile number to get started.</p>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 12 }}>
               <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Mobile number</div>
               <input
                 value={phone}
@@ -99,6 +102,17 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
                 onKeyDown={e => e.key === 'Enter' && sendOtp()}
                 placeholder="03001234567"
                 style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 16, outline: 'none' }}
+              />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Email (OTP will be sent here)</div>
+              <input
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendOtp()}
+                placeholder="you@example.com"
+                type="email"
+                style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, outline: 'none' }}
               />
             </div>
             {error && <div style={{ color: 'var(--n-danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -112,7 +126,7 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
           <>
             <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Verify</div>
             <h2 className="n-display" style={{ fontSize: 36, margin: '0 0 8px', letterSpacing: '-0.02em' }}>Enter OTP</h2>
-            <p style={{ fontSize: 14, color: 'var(--n-muted)', marginBottom: 20 }}>Sent to {phone}</p>
+            <p style={{ fontSize: 14, color: 'var(--n-muted)', marginBottom: 20 }}>Sent to {otpSentTo || phone}</p>
             {devOtp && (
               <div style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--n-accent-soft)', color: 'var(--n-accent-ink)', fontSize: 13, marginBottom: 16 }}>
                 <span className="n-mono">Dev OTP: </span><b style={{ fontSize: 18 }}>{devOtp}</b>

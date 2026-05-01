@@ -35,6 +35,11 @@ function formatDate(date: string) {
   return d.toLocaleDateString('en-PK', { day: 'numeric', month: 'short' });
 }
 
+// Minimum date string for the date input (today)
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
 export default function ConversationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -46,6 +51,12 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
   const [loading, setLoading] = useState(true);
   const [msgInput, setMsgInput] = useState('');
   const [sending, setSending] = useState(false);
+
+  const [viewModal, setViewModal] = useState(false);
+  const [viewDate, setViewDate] = useState('');
+  const [viewTime, setViewTime] = useState('10:00');
+  const [viewNote, setViewNote] = useState('');
+  const [viewSending, setViewSending] = useState(false);
 
   async function fetchMessages() {
     const res = await fetch(`/api/conversations/${id}/messages`);
@@ -86,12 +97,33 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
     }
   }
 
+  async function requestViewing() {
+    if (!viewDate) return;
+    setViewSending(true);
+    const proposedAt = new Date(`${viewDate}T${viewTime}:00`).toISOString();
+    await fetch('/api/viewing-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        listingId: conv?.listing.id,
+        conversationId: id,
+        proposedAt,
+        note: viewNote.trim() || undefined,
+      }),
+    });
+    await fetchMessages();
+    setViewModal(false);
+    setViewDate('');
+    setViewTime('10:00');
+    setViewNote('');
+    setViewSending(false);
+  }
+
   if (authLoading || (!user && !authLoading)) return null;
 
   const other = conv?.participants.find(p => p.user.id !== user?.id);
   const otherName = other?.user.name ?? other?.user.phone ?? 'Landlord';
 
-  // Group messages by date
   const grouped: { date: string; msgs: Message[] }[] = [];
   messages.forEach(m => {
     const date = formatDate(m.createdAt);
@@ -120,9 +152,16 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
             </Link>
           )}
         </div>
+        <button
+          onClick={() => setViewModal(true)}
+          className="n-btn primary sm"
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Icon name="calendar" /> Request viewing
+        </button>
         {conv && (
           <Link href={`/property/${conv.listing.id}`} className="n-btn ghost sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="home" /> View listing
+            <Icon name="home" /> Listing
           </Link>
         )}
       </div>
@@ -148,6 +187,19 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
               </div>
               {group.msgs.map(m => {
                 const isMe = m.senderId === user?.id;
+                const isSystem = m.body.startsWith('📅');
+                if (isSystem) {
+                  return (
+                    <div key={m.id} style={{ textAlign: 'center', margin: '8px 0' }}>
+                      <span
+                        className="n-chip"
+                        style={{ background: 'var(--n-accent-soft)', color: 'var(--n-accent-ink)', borderColor: 'transparent', fontSize: 12, padding: '6px 14px' }}
+                      >
+                        {m.body}
+                      </span>
+                    </div>
+                  );
+                }
                 return (
                   <div
                     key={m.id}
@@ -159,7 +211,8 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
                   >
                     <div
                       style={{
-                        maxWidth: '72%', padding: '10px 14px', borderRadius: isMe ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        maxWidth: '72%', padding: '10px 14px',
+                        borderRadius: isMe ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                         background: isMe ? 'var(--n-accent)' : 'var(--n-surface-2)',
                         color: isMe ? 'var(--n-accent-ink)' : 'var(--n-ink)',
                         fontSize: 14, lineHeight: 1.5,
@@ -197,6 +250,80 @@ export default function ConversationPage({ params }: { params: Promise<{ id: str
           <Icon name="arrow" />
         </button>
       </div>
+
+      {/* Viewing request modal */}
+      {viewModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={() => setViewModal(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} />
+          <div className="n-card" style={{ position: 'relative', width: 440, padding: 32, zIndex: 1 }}>
+            <button onClick={() => setViewModal(false)} style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n-muted)' }}>
+              <Icon name="close" className="n-ico lg" />
+            </button>
+
+            <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Schedule</div>
+            <h2 className="n-display" style={{ fontSize: 30, margin: '0 0 6px' }}>Request a viewing</h2>
+            {conv && (
+              <div style={{ fontSize: 13, color: 'var(--n-muted)', marginBottom: 24 }}>{conv.listing.title}</div>
+            )}
+
+            <div style={{ display: 'grid', gap: 16 }}>
+              <div>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Preferred date</div>
+                <input
+                  type="date"
+                  value={viewDate}
+                  min={todayStr()}
+                  onChange={e => setViewDate(e.target.value)}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 15, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Preferred time</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                  {['09:00', '10:00', '11:00', '12:00', '14:00', '15:00', '16:00', '17:00'].map(t => (
+                    <button
+                      key={t}
+                      onClick={() => setViewTime(t)}
+                      style={{
+                        padding: '8px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--mono)',
+                        border: `1px solid ${viewTime === t ? 'var(--n-accent)' : 'var(--n-line)'}`,
+                        background: viewTime === t ? 'var(--n-accent-soft)' : 'var(--n-surface-2)',
+                        color: viewTime === t ? 'var(--n-accent-ink)' : 'var(--n-muted)',
+                      }}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 6 }}>Note (optional)</div>
+                <textarea
+                  value={viewNote}
+                  onChange={e => setViewNote(e.target.value)}
+                  placeholder="e.g. Coming with family, need parking…"
+                  rows={2}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--n-line)', background: 'var(--n-surface-2)', color: 'var(--n-ink)', fontFamily: 'inherit', fontSize: 14, resize: 'none', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button onClick={() => setViewModal(false)} className="n-btn ghost" style={{ flex: 1, justifyContent: 'center' }}>Cancel</button>
+              <button
+                onClick={requestViewing}
+                disabled={!viewDate || viewSending}
+                className="n-btn accent"
+                style={{ flex: 2, justifyContent: 'center' }}
+              >
+                {viewSending ? 'Sending…' : <><Icon name="calendar" /> Send request</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

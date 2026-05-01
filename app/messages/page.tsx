@@ -34,10 +34,14 @@ export default function MessagesPage() {
   useEffect(() => {
     if (!user && !authLoading) { router.push('/'); return; }
     if (!user) return;
-    fetch('/api/conversations')
-      .then(r => r.json())
-      .then(d => setConversations(d.conversations ?? []))
-      .finally(() => setLoading(false));
+    const load = () =>
+      fetch('/api/conversations')
+        .then(r => r.json())
+        .then(d => setConversations(d.conversations ?? []))
+        .finally(() => setLoading(false));
+    load();
+    const interval = setInterval(load, 8000);
+    return () => clearInterval(interval);
   }, [user, authLoading, router]);
 
   if (authLoading || (!user && !authLoading)) return null;
@@ -66,7 +70,7 @@ export default function MessagesPage() {
         ) : (
           <div className="n-card" style={{ padding: 0, overflow: 'hidden' }}>
             {conversations.map((conv, i) => {
-              const other = conv.participants.find(p => p.user.id !== user.id);
+              const other = conv.participants.find(p => p.user.id !== user?.id);
               const otherName = other?.user.name ?? other?.user.phone ?? 'Unknown';
               const lastMsg = conv.messages[0];
 
@@ -101,7 +105,7 @@ export default function MessagesPage() {
                     </div>
                     {lastMsg && (
                       <div style={{ fontSize: 13, color: 'var(--n-muted)', marginTop: 3, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                        {lastMsg.senderId === user.id ? 'You: ' : ''}{lastMsg.body}
+                        {lastMsg.senderId === user?.id ? 'You: ' : ''}{lastMsg.body}
                       </div>
                     )}
                   </div>

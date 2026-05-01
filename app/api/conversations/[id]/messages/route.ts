@@ -14,19 +14,26 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   });
   if (!participant) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const messages = await prisma.message.findMany({
-    where: { conversationId: id },
-    include: { sender: { select: { id: true, name: true, photoUrl: true } } },
-    orderBy: { createdAt: 'asc' },
-  });
+  const [conversation, messages] = await Promise.all([
+    prisma.conversation.findUnique({
+      where: { id },
+      include: {
+        listing: { select: { id: true, title: true, city: true, rentAmount: true } },
+        participants: { include: { user: { select: { id: true, name: true, phone: true } } } },
+      },
+    }),
+    prisma.message.findMany({
+      where: { conversationId: id },
+      include: { sender: { select: { id: true, name: true, phone: true, photoUrl: true } } },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.message.updateMany({
+      where: { conversationId: id, senderId: { not: session.userId }, status: { not: 'READ' } },
+      data: { status: 'READ' },
+    }),
+  ]);
 
-  // Mark as read
-  await prisma.message.updateMany({
-    where: { conversationId: id, senderId: { not: session.userId }, status: { not: 'READ' } },
-    data: { status: 'READ' },
-  });
-
-  return NextResponse.json({ messages });
+  return NextResponse.json({ conversation, messages });
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

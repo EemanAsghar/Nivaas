@@ -20,7 +20,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="theme-graphite">
+      <body>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

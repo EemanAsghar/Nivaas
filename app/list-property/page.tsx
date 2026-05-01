@@ -53,10 +53,23 @@ export default function ListPropertyPage() {
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [publishing, setPublishing] = useState(false);
+  const [gateway, setGateway] = useState<'JAZZCASH' | 'EASYPAISA' | 'CARD'>('JAZZCASH');
+  const [priceStats, setPriceStats] = useState<{ count: number; avg: number | null; min: number | null; max: number | null } | null>(null);
 
   useEffect(() => {
     return () => previewUrls.forEach(u => URL.revokeObjectURL(u));
   }, [previewUrls]);
+
+  useEffect(() => {
+    if (!form.city) return;
+    const params = new URLSearchParams({ city: form.city });
+    if (form.propertyType) params.set('type', form.propertyType);
+    if (form.rooms) params.set('rooms', form.rooms);
+    fetch(`/api/search/price-stats?${params}`)
+      .then(r => r.json())
+      .then(d => setPriceStats(d.count > 0 ? d : null))
+      .catch(() => {});
+  }, [form.city, form.propertyType, form.rooms]);
 
   function set(key: keyof FormState, val: string) {
     setForm(f => ({ ...f, [key]: val }));
@@ -141,13 +154,13 @@ export default function ListPropertyPage() {
         await fetch(`/api/listings/${listingId}/photos`, { method: 'POST', body: fd });
       }
 
-      // 3. Activate (mock payment — mark as ACTIVE)
-      const patchRes = await fetch(`/api/listings/${listingId}`, {
-        method: 'PATCH',
+      // 3. Pay listing fee — activates listing as side-effect
+      const payRes = await fetch('/api/payments', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'ACTIVE' }),
+        body: JSON.stringify({ type: 'LISTING_FEE', listingId, gateway }),
       });
-      if (!patchRes.ok) { setError('Failed to publish listing.'); return; }
+      if (!payRes.ok) { setError('Payment failed. Please try again.'); return; }
 
       router.push(`/property/${listingId}`);
     } finally {
@@ -344,6 +357,19 @@ export default function ListPropertyPage() {
                 {form.rentAmount && (
                   <div className="n-mono" style={{ color: 'var(--n-muted)', marginTop: 6 }}>
                     ₨ {parseInt(form.rentAmount).toLocaleString()} / month
+                  </div>
+                )}
+                {priceStats && (
+                  <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--n-accent-soft)', display: 'flex', gap: 16 }}>
+                    <span className="n-mono" style={{ color: 'var(--n-accent-ink)', fontSize: 11 }}>
+                      Market · {priceStats.count} listings
+                    </span>
+                    <span className="n-mono" style={{ color: 'var(--n-accent-ink)', fontSize: 11 }}>
+                      avg ₨{priceStats.avg!.toLocaleString()}
+                    </span>
+                    <span className="n-mono" style={{ color: 'var(--n-accent-ink)', fontSize: 11 }}>
+                      ₨{priceStats.min!.toLocaleString()} – ₨{priceStats.max!.toLocaleString()}
+                    </span>
                   </div>
                 )}
               </div>
@@ -550,12 +576,34 @@ export default function ListPropertyPage() {
               </div>
 
               {/* Fee */}
-              <div className="n-card" style={{ padding: 20, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div className="n-card" style={{ padding: 20, marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontWeight: 500 }}>Listing fee</div>
                   <div className="n-mono" style={{ color: 'var(--n-muted)', marginTop: 4 }}>One-time · Valid 90 days · Renew anytime</div>
                 </div>
                 <div className="n-display" style={{ fontSize: 32 }}>₨ 1,500</div>
+              </div>
+
+              {/* Gateway picker */}
+              <div style={{ marginBottom: 20 }}>
+                <div className="n-mono" style={{ color: 'var(--n-muted)', marginBottom: 8 }}>Pay via</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                  {(['JAZZCASH', 'EASYPAISA', 'CARD'] as const).map(g => (
+                    <button
+                      key={g}
+                      onClick={() => setGateway(g)}
+                      style={{
+                        padding: '12px 0', borderRadius: 10, fontSize: 13, cursor: 'pointer',
+                        fontFamily: 'var(--mono)', fontWeight: gateway === g ? 600 : 400,
+                        border: `1.5px solid ${gateway === g ? 'var(--n-accent)' : 'var(--n-line)'}`,
+                        background: gateway === g ? 'var(--n-accent-soft)' : 'var(--n-surface-2)',
+                        color: gateway === g ? 'var(--n-accent-ink)' : 'var(--n-muted)',
+                      }}
+                    >
+                      {g === 'JAZZCASH' ? 'JazzCash' : g === 'EASYPAISA' ? 'Easypaisa' : 'Card'}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <button
@@ -564,11 +612,8 @@ export default function ListPropertyPage() {
                 className="n-btn accent"
                 style={{ width: '100%', height: 52, justifyContent: 'center', fontSize: 16 }}
               >
-                {publishing ? 'Publishing…' : <><Icon name="zap" /> Publish listing · ₨ 1,500</>}
+                {publishing ? 'Processing payment…' : <><Icon name="zap" /> Pay ₨ 1,500 &amp; publish</>}
               </button>
-              <div className="n-mono" style={{ color: 'var(--n-muted-2)', textAlign: 'center', marginTop: 10, fontSize: 12 }}>
-                Demo mode — listing activates instantly without real payment
-              </div>
             </div>
           )}
         </div>
